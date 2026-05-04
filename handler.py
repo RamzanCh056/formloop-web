@@ -1,111 +1,111 @@
-#!/usr/bin/env python3
-"""
-RunPod Serverless worker entrypoint.
-
-Expected job ``input`` (JSON), for example::
-
-    {"video_url": "https://example.com/clip.mp4"}
-
-Optional fields: ``device`` (default ``cuda``), ``transparent_gif`` (bool),
-``timeout_sec`` (int, default 3600).
-
-Start the worker (set container command to)::
-
-    python -u handler.py
-
-Requires ``rvm_resnet50.pth`` in the app directory (bake into image or mount).
-"""
-from __future__ import annotations
-
-import os
-import shutil
-import subprocess
-import urllib.request
-from pathlib import Path
-
 import runpod
+import subprocess
+import os
+import tempfile
+import base64
+import json
+import firebase_admin
+from firebase_admin import credentials, storage
 
-APP_ROOT = Path(__file__).resolve().parent
-CHECKPOINT = APP_ROOT / "rvm_resnet50.pth"
-OUTPUT_ROOT = Path(os.environ.get("RVM_OUTPUTS_DIR", str(APP_ROOT / "api_outputs"))).resolve()
+# Initialize Firebase
+firebase_config_str = os.environ.get("FIREBASE_CONFIG", "{}")
+firebase_bucket = os.environ.get("FIREBASE_BUCKET", "")
 
-
-def _download(url: str, dest: Path) -> None:
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "formloop-runpod/1.0"})
-    with urllib.request.urlopen(req) as r, open(dest, "wb") as f:
-        shutil.copyfileobj(r, f)
-
-
-def handler(job: dict) -> dict:
-    job_input = job.get("input") or {}
-    video_url = job_input.get("video_url")
-    if not video_url or not isinstance(video_url, str):
-        return {"error": "Missing or invalid input.video_url (string)."}
-
-    if not CHECKPOINT.is_file():
-        return {
-            "error": (
-                f"Checkpoint not found: {CHECKPOINT}. "
-                "Add rvm_resnet50.pth to the image or mount it at this path."
-            )
-        }
-
-    job_id = str(job.get("id") or "anonymous")
-    work = OUTPUT_ROOT / "runpod" / job_id
-    work.mkdir(parents=True, exist_ok=True)
-    src = work / "input.mp4"
-    out_gif = work / "output.gif"
-
+if firebase_config_str and firebase_config_str != "{}" and not firebase_admin._apps:
     try:
-        _download(video_url, src)
+        firebase_config = json.loads(firebase_config_str)
+        cred = credentials.Certificate(firebase_config)
+        firebase_admin.initialize_app(cred, {
+            'storageBucket': firebase_bucket
+        })
+        print("[Firebase] Initialized successfully")
     except Exception as e:
-        return {"error": f"Download failed: {e}"}
+        print(f"[Firebase] Init error: {e}")
 
-    cmd = [
-        os.environ.get("PYTHON", "python3"),
-        str(APP_ROOT / "process_video.py"),
-        "--input",
-        str(src),
-        "--gif",
-        str(out_gif),
-        "--device",
-        str(job_input.get("device") or "cuda"),
-    ]
-    if job_input.get("transparent_gif"):
-        cmd.append("--transparent-gif")
+def upload_to_firebase(gif_path, exercise_name):
+    try:
+        bucket = storage.bucket()
+        blob = bucket.blob(f"gifs/{exercise_name}.gif")
+        blob.upload_from_filename(gif_path, content_type="image/gif")
+        blob.make_public()
+        url = blob.public_url
+        print(f"[Firebase] Uploaded: {url}")
+        return url
+    except Exception as e:
+        print(f"[Firebase] Upload error: {e}")
+        return None
 
-    timeout = int(job_input.get("timeout_sec") or 3600)
-    env = os.environ.copy()
-    env.setdefault("PYTHONPATH", str(APP_ROOT))
+def handler(job):
+    print(f"[Job] Starting: {job['id']}")
+    job_input = job["input"]
+
+    video_b64     = job_input.get("video")
+    exercise_name = job_input.get("exercise_name", "exercise")
+    gif_width     = job_input.get("gif_width", 960)
+    gif_fps       = job_input.get("gif_fps", 15)
+    dilation      = job_input.get("dilation", 18)
+    conf          = job_input.get("conf", 0.20)
+
+    if not video_b64:
+        return {"error": "No video provided"}
+
+    tmp_dir  = tempfile.mkdtemp()
+    vid_path = os.path.join(tmp_dir, f"{exercise_name}.mp4")
+    gif_path = os.path.join(tmp_dir, f"{exercise_name}.gif")
 
     try:
-        proc = subprocess.run(
-            cmd,
-            cwd=str(APP_ROOT),
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=timeout,
-        )
+        # Save video
+        print("[Job] Decoding video...")
+        with open(vid_path, "wb") as f:
+            f.write(base64.b64decode(video_b64))
+
+        # Run pipeline
+        print("[Job] Running BiRefNet pipeline...")
+        result = subprocess.run([
+            "python", "process_video_pro.py",
+            "--input",     vid_path,
+            "--gif",       gif_path,
+            "--gif-width", str(gif_width),
+            "--gif-fps",   str(gif_fps),
+            "--dilation",  str(dilation),
+            "--conf",      str(conf),
+            "--device",    "cuda"
+        ], capture_output=True, text=True, timeout=900)
+
+        print(f"[Job] stdout: {result.stdout[-500:]}")
+
+        if result.returncode != 0:
+            print(f"[Job] Error: {result.stderr[-500:]}")
+            return {"error": result.stderr[-500:]}
+
+        # Upload to Firebase
+        print("[Job] Uploading to Firebase...")
+        public_url = upload_to_firebase(gif_path, exercise_name)
+
+        if public_url:
+            return {
+                "status":   "success",
+                "gif_url":  public_url,
+                "exercise": exercise_name
+            }
+        else:
+            # Fallback: return base64
+            with open(gif_path, "rb") as f:
+                gif_b64 = base64.b64encode(f.read()).decode("utf-8")
+            return {
+                "status":  "success",
+                "gif_b64": gif_b64,
+                "warning": "Firebase failed, returning base64"
+            }
+
     except subprocess.TimeoutExpired:
-        return {"error": f"Job timed out after {timeout}s"}
-
-    if proc.returncode != 0:
-        return {
-            "error": "process_video.py failed",
-            "returncode": proc.returncode,
-            "stderr_tail": (proc.stderr or "")[-8000:],
-            "stdout_tail": (proc.stdout or "")[-4000:],
-        }
-
-    if not out_gif.is_file():
-        return {"error": "process_video.py exited 0 but output.gif was not created."}
-
-    return {
-        "output_gif": str(out_gif),
-        "size_bytes": out_gif.stat().st_size,
-    }
-
+        return {"error": "Timeout - video too long"}
+    except Exception as e:
+        return {"error": str(e)}
+    finally:
+        if os.path.exists(vid_path): os.unlink(vid_path)
+        if os.path.exists(gif_path): os.unlink(gif_path)
+        try: os.rmdir(tmp_dir)
+        except: pass
 
 runpod.serverless.start({"handler": handler})

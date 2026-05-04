@@ -1,31 +1,49 @@
-# GPU image for FormLoop / RVM: HTTP API (default) or RunPod Serverless (see handler.py).
-FROM pytorch/pytorch:2.2.1-cuda12.1-cudnn8-runtime
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+# syntax=docker/dockerfile:1.4
+FROM runpod/pytorch:2.8.0-py3.11-cuda12.8-devel
 
 WORKDIR /app
 
-COPY requirements_api.txt requirements_inference.txt ./
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    ffmpeg \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
 
-# Base image supplies torch/torchvision; install API + inference stack (skip pinned torch from inference file).
-RUN pip install --no-cache-dir -r requirements_api.txt && \
-    pip install --no-cache-dir av tqdm pims opencv-python-headless ultralytics runpod
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    transformers \
+    accelerate \
+    ultralytics \
+    mediapipe \
+    opencv-python-headless \
+    pillow \
+    imageio \
+    firebase-admin \
+    runpod \
+    huggingface_hub \
+    scipy
 
-COPY . .
+# Copy project files
+COPY process_video_pro.py .
+COPY handler.py .
 
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONPATH=/app
+# Pre-download BiRefNet model (baked into image = faster job start)
+RUN python3 <<'PY'
+from transformers import AutoModelForImageSegmentation
+model = AutoModelForImageSegmentation.from_pretrained(
+    'ZhengPeng7/BiRefNet',
+    trust_remote_code=True
+)
+print('BiRefNet downloaded successfully')
+PY
 
-# Model weights: place rvm_resnet50.pth in build context (or mount at runtime).
-# .dockerignore excludes large local caches; copy checkpoint in CI or: docker build --secret, etc.
+# Pre-download YOLO models
+RUN python3 <<'PY'
+from ultralytics import YOLO
+YOLO('yolov8x-seg.pt')
+YOLO('yolov8x-pose.pt')
+print('YOLO models downloaded successfully')
+PY
 
-EXPOSE 8000
-
-# RunPod Pod / generic HTTP
-CMD ["uvicorn", "api_server:app", "--host", "0.0.0.0", "--port", "8000"]
-
-# RunPod Serverless: override start command to:
-#   python -u handler.py
+CMD ["python", "-u", "handler.py"]
