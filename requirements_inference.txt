@@ -3,3 +3,8 @@ torch==1.9.0
 torchvision==0.10.0
 tqdm==4.61.1
 pims==0.5
+opencv-python-headless>=4.5.0
+# Optional: animated WebP fallback if ffmpeg has no libwebp_anim (process_video transparent WebP)
+# pillow>=9.0.0
+# Optional: primary-person mask for transparent GIF (removes background people, keeps main athlete)
+# ultralytics>=8.0.0

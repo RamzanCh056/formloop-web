@@ -21,7 +21,14 @@ class VideoReader(Dataset):
         return len(self.video)
         
     def __getitem__(self, idx):
-        frame = self.video[idx]
+        try:
+            frame = self.video[idx]
+        except av.error.EOFError:
+            # Some MP4 files report more frames than can be decoded.
+            # Fallback to the previous frame so the export can finish.
+            if idx <= 0:
+                raise
+            frame = self.video[idx - 1]
         frame = Image.fromarray(np.asarray(frame))
         if self.transform is not None:
             frame = self.transform(frame)
@@ -29,11 +36,14 @@ class VideoReader(Dataset):
 
 
 class VideoWriter:
-    def __init__(self, path, frame_rate, bit_rate=1000000):
-        self.container = av.open(path, mode='w')
-        self.stream = self.container.add_stream('h264', rate=f'{frame_rate:.4f}')
-        self.stream.pix_fmt = 'yuv420p'
+    def __init__(self, path, frame_rate, bit_rate=8_000_000, pix_fmt: str = "yuv420p"):
+        self.container = av.open(path, mode="w")
+        fps = int(max(1, round(float(frame_rate))))
+        self.stream = self.container.add_stream("h264", rate=fps)
+        self.stream.pix_fmt = pix_fmt
         self.stream.bit_rate = bit_rate
+        if pix_fmt == "yuv444p":
+            self.stream.options = {"profile": "high444"}
     
     def write(self, frames):
         # frames: [T, C, H, W]

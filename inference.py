@@ -21,6 +21,11 @@ from tqdm.auto import tqdm
 
 from inference_utils import VideoReader, VideoWriter, ImageSequenceReader, ImageSequenceWriter
 
+# MattingNetwork F.interpolate scale_factor: 1.0 = full-res backbone — best for thin objects (bars, hair).
+# Lower values are faster but drop fine detail. Do not blur alpha post-process; that erodes thin foreground.
+DEFAULT_DOWNSAMPLE_RATIO = 1.0
+
+
 def convert_video(model,
                   input_source: str,
                   input_resize: Optional[Tuple[int, int]] = None,
@@ -30,9 +35,11 @@ def convert_video(model,
                   output_alpha: Optional[str] = None,
                   output_foreground: Optional[str] = None,
                   output_video_mbps: Optional[float] = None,
+                  output_video_pix_fmt: str = "yuv420p",
                   seq_chunk: int = 1,
                   num_workers: int = 0,
                   progress: bool = True,
+                  progress_interval: int = 12,
                   device: Optional[str] = None,
                   dtype: Optional[torch.dtype] = None):
     
@@ -40,7 +47,7 @@ def convert_video(model,
     Args:
         input_source:A video file, or an image sequence directory. Images must be sorted in accending order, support png and jpg.
         input_resize: If provided, the input are first resized to (w, h).
-        downsample_ratio: The model's downsample_ratio hyperparameter. If not provided, model automatically set one.
+        downsample_ratio: Backbone scale factor; if None, uses DEFAULT_DOWNSAMPLE_RATIO (1.0 = full res, best for thin detail).
         output_type: Options: ["video", "png_sequence"].
         output_composition:
             The composition output path. File path if output_type == 'video'. Directory path if output_type == 'png_sequence'.
@@ -51,6 +58,7 @@ def convert_video(model,
         seq_chunk: Number of frames to process at once. Increase it for better parallelism.
         num_workers: PyTorch's DataLoader workers. Only use >0 for image input.
         progress: Show progress bar.
+        progress_interval: Emit "RVM_PROGRESS" log every N frames.
         device: Only need to manually provide if model is a TorchScript freezed model.
         dtype: Only need to manually provide if model is a TorchScript freezed model.
     """
@@ -80,22 +88,28 @@ def convert_video(model,
     # Initialize writers
     if output_type == 'video':
         frame_rate = source.frame_rate if isinstance(source, VideoReader) else 30
-        output_video_mbps = 1 if output_video_mbps is None else output_video_mbps
+        output_video_mbps = 8 if output_video_mbps is None else output_video_mbps
         if output_composition is not None:
             writer_com = VideoWriter(
                 path=output_composition,
                 frame_rate=frame_rate,
-                bit_rate=int(output_video_mbps * 1000000))
+                bit_rate=int(output_video_mbps * 1000000),
+                pix_fmt=output_video_pix_fmt,
+            )
         if output_alpha is not None:
             writer_pha = VideoWriter(
                 path=output_alpha,
                 frame_rate=frame_rate,
-                bit_rate=int(output_video_mbps * 1000000))
+                bit_rate=int(output_video_mbps * 1000000),
+                pix_fmt=output_video_pix_fmt,
+            )
         if output_foreground is not None:
             writer_fgr = VideoWriter(
                 path=output_foreground,
                 frame_rate=frame_rate,
-                bit_rate=int(output_video_mbps * 1000000))
+                bit_rate=int(output_video_mbps * 1000000),
+                pix_fmt=output_video_pix_fmt,
+            )
     else:
         if output_composition is not None:
             writer_com = ImageSequenceWriter(output_composition, 'png')
@@ -117,14 +131,17 @@ def convert_video(model,
     try:
         with torch.no_grad():
             bar = tqdm(total=len(source), disable=not progress, dynamic_ncols=True)
+            # Recurrent states persist across the whole sequence (not reset per frame or per batch).
             rec = [None] * 4
+            ds = downsample_ratio if downsample_ratio is not None else DEFAULT_DOWNSAMPLE_RATIO
+            total_frames = int(len(source))
+            done_frames = 0
+            emit_every = max(1, int(progress_interval))
+            last_emit = -emit_every
             for src in reader:
 
-                if downsample_ratio is None:
-                    downsample_ratio = auto_downsample_ratio(*src.shape[2:])
-
                 src = src.to(device, dtype, non_blocking=True).unsqueeze(0) # [B, T, C, H, W]
-                fgr, pha, *rec = model(src, *rec, downsample_ratio)
+                fgr, pha, *rec = model(src, *rec, ds)
 
                 if output_foreground is not None:
                     writer_fgr.write(fgr[0])
@@ -139,6 +156,12 @@ def convert_video(model,
                     writer_com.write(com[0])
                 
                 bar.update(src.size(1))
+                done_frames += int(src.size(1))
+                if total_frames > 0:
+                    pct = int(min(100, max(0, (done_frames * 100) // total_frames)))
+                    if (done_frames - last_emit >= emit_every) or (done_frames >= total_frames):
+                        print(f"RVM_PROGRESS:{done_frames}/{total_frames}:{pct}", flush=True)
+                        last_emit = done_frames
 
     finally:
         # Clean up
@@ -150,19 +173,12 @@ def convert_video(model,
             writer_fgr.close()
 
 
-def auto_downsample_ratio(h, w):
-    """
-    Automatically find a downsample ratio so that the largest side of the resolution be 512px.
-    """
-    return min(512 / max(h, w), 1)
-
-
 class Converter:
     def __init__(self, variant: str, checkpoint: str, device: str):
-        self.model = MattingNetwork(variant).eval().to(device)
+        self.model = MattingNetwork(variant).eval().float()
         self.model.load_state_dict(torch.load(checkpoint, map_location=device))
+        self.model = self.model.to(device)
         self.model = torch.jit.script(self.model)
-        self.model = torch.jit.freeze(self.model)
         self.device = device
     
     def convert(self, *args, **kwargs):
@@ -183,10 +199,18 @@ if __name__ == '__main__':
     parser.add_argument('--output-alpha', type=str)
     parser.add_argument('--output-foreground', type=str)
     parser.add_argument('--output-type', type=str, required=True, choices=['video', 'png_sequence'])
-    parser.add_argument('--output-video-mbps', type=int, default=1)
+    parser.add_argument('--output-video-mbps', type=int, default=8)
+    parser.add_argument(
+        '--output-video-pix-fmt',
+        type=str,
+        default='yuv420p',
+        choices=('yuv420p', 'yuv444p'),
+        help='H.264 pixel format: yuv444p keeps full chroma (better for thin bars/weights); yuv420p smaller.',
+    )
     parser.add_argument('--seq-chunk', type=int, default=1)
     parser.add_argument('--num-workers', type=int, default=0)
     parser.add_argument('--disable-progress', action='store_true')
+    parser.add_argument('--progress-interval', type=int, default=12)
     args = parser.parse_args()
     
     converter = Converter(args.variant, args.checkpoint, args.device)
@@ -199,9 +223,11 @@ if __name__ == '__main__':
         output_alpha=args.output_alpha,
         output_foreground=args.output_foreground,
         output_video_mbps=args.output_video_mbps,
+        output_video_pix_fmt=args.output_video_pix_fmt,
         seq_chunk=args.seq_chunk,
         num_workers=args.num_workers,
-        progress=not args.disable_progress
+        progress=not args.disable_progress,
+        progress_interval=args.progress_interval,
     )
     
     
