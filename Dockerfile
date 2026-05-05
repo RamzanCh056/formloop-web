@@ -29,8 +29,7 @@ RUN pip install --no-cache-dir \
 COPY process_video_pro.py .
 COPY handler.py .
 
-RUN python3 -c "from transformers import AutoModelForImageSegmentation; AutoModelForImageSegmentation.from_pretrained('ZhengPeng7/BiRefNet', trust_remote_code=True); print('BiRefNet OK')"
-
-RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n-seg.pt'); YOLO('yolov8n-pose.pt'); print('YOLO OK')"
+# Keep build lightweight/stable for RunPod builder.
+# Models download on first worker run and are cached per worker instance.
 
 CMD ["python", "-u", "handler.py"]
