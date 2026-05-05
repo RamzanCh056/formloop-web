@@ -2,6 +2,7 @@
 FROM pytorch/pytorch:2.4.0-cuda12.4-cudnn9-runtime
 
 WORKDIR /app
+ARG CACHE_BUST=20260505_1935
 
 RUN apt-get update && apt-get install -y \
     ffmpeg \
@@ -14,7 +15,6 @@ RUN pip install --no-cache-dir \
     accelerate \
     ultralytics \
     requests \
-    mediapipe \
     opencv-python-headless \
     pillow \
     imageio \
@@ -24,7 +24,8 @@ RUN pip install --no-cache-dir \
     scipy \
     einops \
     kornia \
-    timm
+    timm && \
+    python3 -c "print('cache bust:', '${CACHE_BUST}')"
 
 COPY process_video_pro.py .
 COPY handler.py .
