@@ -1,6 +1,0 @@
-# Optional: alternative matting (process_video_rembg.py). Prefer Python 3.10–3.12 if wheels fail on 3.14.
-onnxruntime>=1.16
-rembg[cli]>=2.0.56
-pillow>=9.0
-numpy>=1.21
-tqdm>=4.61
