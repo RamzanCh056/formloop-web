@@ -38,7 +38,7 @@ EXCLUDE = {
     "vase",
 }
 
-INFER_WIDTH = 720
+INFER_WIDTH = 512
 
 
 def parse_args() -> argparse.Namespace:
@@ -321,11 +321,11 @@ def main() -> None:
     pose_model: YOLO | None = None
     seg_model: YOLO | None = None
     if not args.no_yolo:
-        print("[YOLO] loading yolov8x-pose.pt …", flush=True)
-        pose_model = YOLO("yolov8x-pose.pt")
+        print("[YOLO] loading yolov8n-pose.pt …", flush=True)
+        pose_model = YOLO("yolov8n-pose.pt")
         pose_model.overrides["conf"] = float(args.conf)
-        print("[YOLO] loading yolov8x-seg.pt …", flush=True)
-        seg_model = YOLO("yolov8x-seg.pt")
+        print("[YOLO] loading yolov8n-seg.pt …", flush=True)
+        seg_model = YOLO("yolov8n-seg.pt")
         seg_model.overrides["conf"] = float(args.conf)
 
     cap = cv2.VideoCapture(str(inp))

@@ -43,8 +43,8 @@ def handler(job):
     video_b64     = job_input.get("video")
     video_url     = job_input.get("video_url")
     exercise_name = job_input.get("exercise_name", "exercise")
-    gif_width     = job_input.get("gif_width", 960)
-    gif_fps       = job_input.get("gif_fps", 15)
+    gif_width     = job_input.get("gif_width", 640)
+    gif_fps       = job_input.get("gif_fps", 12)
     dilation      = job_input.get("dilation", 18)
     conf          = job_input.get("conf", 0.20)
 

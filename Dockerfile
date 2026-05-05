@@ -31,6 +31,6 @@ COPY handler.py .
 
 RUN python3 -c "from transformers import AutoModelForImageSegmentation; AutoModelForImageSegmentation.from_pretrained('ZhengPeng7/BiRefNet', trust_remote_code=True); print('BiRefNet OK')"
 
-RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8x-seg.pt'); YOLO('yolov8x-pose.pt'); print('YOLO OK')"
+RUN python3 -c "from ultralytics import YOLO; YOLO('yolov8n-seg.pt'); YOLO('yolov8n-pose.pt'); print('YOLO OK')"
 
 CMD ["python", "-u", "handler.py"]
