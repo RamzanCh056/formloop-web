@@ -20,7 +20,10 @@ RUN pip install --no-cache-dir \
     firebase-admin \
     runpod \
     huggingface_hub \
-    scipy
+    scipy \
+    einops \
+    kornia \
+    timm
 
 COPY process_video_pro.py .
 COPY handler.py .
