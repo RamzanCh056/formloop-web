@@ -4,6 +4,7 @@ import os
 import tempfile
 import base64
 import json
+import requests
 import firebase_admin
 from firebase_admin import credentials, storage
 
@@ -40,13 +41,14 @@ def handler(job):
     job_input = job["input"]
 
     video_b64     = job_input.get("video")
+    video_url     = job_input.get("video_url")
     exercise_name = job_input.get("exercise_name", "exercise")
     gif_width     = job_input.get("gif_width", 960)
     gif_fps       = job_input.get("gif_fps", 15)
     dilation      = job_input.get("dilation", 18)
     conf          = job_input.get("conf", 0.20)
 
-    if not video_b64:
+    if not video_b64 and not video_url:
         return {"error": "No video provided"}
 
     tmp_dir  = tempfile.mkdtemp()
@@ -54,10 +56,17 @@ def handler(job):
     gif_path = os.path.join(tmp_dir, f"{exercise_name}.gif")
 
     try:
-        # Save video
-        print("[Job] Decoding video...")
-        with open(vid_path, "wb") as f:
-            f.write(base64.b64decode(video_b64))
+        # Save video from either base64 or URL.
+        if video_url:
+            print("[Job] Downloading video URL...")
+            resp = requests.get(str(video_url), timeout=300)
+            resp.raise_for_status()
+            with open(vid_path, "wb") as f:
+                f.write(resp.content)
+        else:
+            print("[Job] Decoding video...")
+            with open(vid_path, "wb") as f:
+                f.write(base64.b64decode(video_b64))
 
         # Run pipeline
         print("[Job] Running BiRefNet pipeline...")

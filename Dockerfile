@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir \
     transformers \
     accelerate \
     ultralytics \
+    requests \
     mediapipe \
     opencv-python-headless \
     pillow \
