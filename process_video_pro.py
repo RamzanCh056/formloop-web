@@ -10,6 +10,7 @@ INSTALL:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -252,13 +253,40 @@ def _rgba_from_bgr_and_alpha(frame_bgr: np.ndarray, alpha_u8: np.ndarray) -> np.
     return np.dstack([rgb, alpha_u8])
 
 
+def _decimate_frames_for_gif(
+    frames: list[np.ndarray],
+    *,
+    video_fps: float,
+    gif_fps: int,
+    max_frames: int,
+) -> list[np.ndarray]:
+    """Keep ~duration×gif_fps frames so GIF time matches video without encoding every source frame."""
+    if len(frames) <= 2:
+        return frames
+    vf = max(0.001, float(video_fps))
+    duration = len(frames) / vf
+    target = min(max_frames, max(2, int(round(duration * max(1, gif_fps)))))
+    n = len(frames)
+    if n <= target:
+        return frames
+    idxs = np.linspace(0, n - 1, num=target, dtype=int)
+    return [frames[int(i)] for i in idxs]
+
+
 def frames_to_gif(rgba_frames: list[np.ndarray], path: str | Path, fps: int, width: int) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     pil_frames: list[Image.Image] = []
     duration_ms = max(1, int(round(1000.0 / float(max(1, fps)))))
     resize_f = getattr(Image, "LANCZOS", Image.Resampling.LANCZOS)
-    for rgba in rgba_frames:
+    q_method = getattr(Image.Quantize, "FASTOCTREE", Image.Quantize.MEDIANCUT)
+    q_colors = max(32, min(255, int(os.environ.get("RVM_PRO_GIF_COLORS", "128"))))
+    use_dither = (os.environ.get("RVM_PRO_GIF_DITHER", "0").strip().lower() not in {"0", "false", "no"})
+    dither = Image.Dither.FLOYDSTEINBERG if use_dither else Image.Dither.NONE
+    total = len(rgba_frames)
+    for fi, rgba in enumerate(rgba_frames):
+        if fi > 0 and fi % 80 == 0:
+            print(f"[GIF] quantize {fi}/{total}", flush=True)
         img = Image.fromarray(rgba, "RGBA")
         ow, oh = img.size
         nh = max(1, int(round(oh * width / max(1, ow))))
@@ -266,7 +294,7 @@ def frames_to_gif(rgba_frames: list[np.ndarray], path: str | Path, fps: int, wid
         r, g, b, a = img.split()
         rgb_p = (
             Image.merge("RGB", (r, g, b))
-            .quantize(colors=255, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.FLOYDSTEINBERG)
+            .quantize(colors=q_colors, method=q_method, dither=dither)
             .convert("P")
         )
         arr = np.array(rgb_p)
@@ -400,8 +428,8 @@ def main() -> None:
                 m3 = (alpha_u8.astype(np.float32) / 255.0)[..., None]
                 fg = np.clip(fg * m3, 0, 255).astype(np.uint8)
                 fg_writer.write(fg)
-            if a_writer is not None:
-                a_writer.write(alpha_u8)
+        if a_writer is not None:
+            a_writer.write(alpha_u8)
     finally:
         cap.release()
         if fg_writer is not None:
@@ -409,7 +437,15 @@ def main() -> None:
         if a_writer is not None:
             a_writer.release()
 
-    frames_to_gif(gif_rgba, Path(args.gif).resolve(), int(args.gif_fps), int(args.gif_width))
+    max_gif = max(24, int(os.environ.get("RVM_PRO_GIF_MAX_FRAMES", "480")))
+    gif_src = _decimate_frames_for_gif(
+        gif_rgba, video_fps=float(fps), gif_fps=int(args.gif_fps), max_frames=max_gif
+    )
+    print(
+        f"[GIF] encoding {len(gif_src)} frames (video frames={len(gif_rgba)}, target_fps={args.gif_fps})",
+        flush=True,
+    )
+    frames_to_gif(gif_src, Path(args.gif).resolve(), int(args.gif_fps), int(args.gif_width))
     print(f"[DONE] outputs under: {Path(args.gif).resolve().parent}", flush=True)
 
 
