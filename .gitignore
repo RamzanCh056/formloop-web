@@ -2,6 +2,7 @@
 .env
 firebase-key.json
 firebase-config.json
+data/user_billing.json
 
 # Model weights
 *.pth
