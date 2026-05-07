@@ -170,9 +170,9 @@ def upload_user_export_media_from_urls(
     gif_url: str,
     webm_url: str | None,
 ) -> dict[str, str | None]:
-    """Download GIF/WebM from HTTPS (RunPod/Firebase public URLs) and upload under ``users/{uid}/exports/{export_id}/``.
+    """Copy GIF/WebM bytes from HTTPS (RunPod / `gifs/` / `webms/` bucket URLs) into **your** Firebase path ``users/{uid}/exports/{export_id}/``.
 
-    Used when the API disk does not have ``matte.gif`` but the browser still has canonical URLs.
+    The Admin SDK needs bytes once; we fetch from URL then upload — nothing is stored as the user's library on the API machine.
     """
     if not firebase_storage_ready():
         raise RuntimeError("Firebase Storage is not configured")

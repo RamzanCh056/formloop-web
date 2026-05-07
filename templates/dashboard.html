@@ -1066,10 +1066,10 @@
               createdAtServer: serverTimestamp(),
               updatedAtServer: serverTimestamp(),
             }, { merge: true });
-            setFlowStatus('Saved to local + cloud library.', 'ok');
+            setFlowStatus('Saved to your Firebase library.', 'ok');
           }
           if (!current) {
-            setFlowStatus('Saved locally. Sign in to sync to cloud library.', 'muted');
+            setFlowStatus('Saved in this browser only — sign in to save to your Firebase library.', 'muted');
           }
           setFlowStatus('Export saved. Returning to library...', 'ok');
           setStatus('Export saved. Returning to library...', 'ok');

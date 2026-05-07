@@ -499,7 +499,7 @@ def _runpod_extract_output_dict(payload: dict) -> dict:
 
 
 def _persist_runpod_job_artifacts(job_id: str, payload: dict) -> None:
-    """Download GIF/WebM from RunPod Firebase URLs so local job dir has files for /files and library save."""
+    """Optional: mirror RunPod GIF/WebM into ``api_outputs`` for ``GET /api/v1/matte/files/...`` — library Save uses Firebase URLs directly."""
     d = _runpod_extract_output_dict(payload)
     if not d:
         return
@@ -1064,19 +1064,19 @@ async def save_export_to_library(job_id: str, request: Request) -> JSONResponse:
     webm_remote = str(payload.get("webm_url") or "").strip() or None
 
     job_dir = OUTPUTS_DIR / job_id
-    # RunPod / multi-instance: job folder may be missing if outputs were pruned or another node handled the job.
-    # If the browser sends Firebase GIF/WebM URLs, create the folder and hydrate files so save + Storage upload work.
+    # Tiny on-disk job record (.owner, .saved); GIF/WebM for your library go to Firebase via URLs below.
     if not job_dir.is_dir():
         if gif_remote or webm_remote:
             job_dir.mkdir(parents=True, exist_ok=True)
         else:
             raise HTTPException(
                 status_code=404,
-                detail="job folder not on this server — retry Save after processing, or ensure API sticky sessions / shared volume.",
+                detail="Unknown job — process the clip again from this app, or Save must include gif_url from the result.",
             )
     owner = read_job_owner(job_dir)
     if owner and owner != uid:
         raise HTTPException(status_code=403, detail="not your export")
+    # Optional cache for preview URLs only; Firebase library upload does not depend on this.
     if gif_remote or webm_remote:
         await asyncio.to_thread(_ensure_job_assets_from_client_urls, job_dir, gif_remote, webm_remote)
     try:
@@ -1099,15 +1099,8 @@ async def save_export_to_library(job_id: str, request: Request) -> JSONResponse:
                 gif_path = job_dir / "matte.gif"
                 webm_path = job_dir / "matte_transparent.webm"
                 urls = None
-                if gif_path.is_file():
-                    urls = await asyncio.to_thread(
-                        upload_user_export_media,
-                        uid=uid,
-                        export_id=export_id,
-                        gif_path=gif_path,
-                        webm_path=webm_path if webm_path.is_file() else None,
-                    )
-                elif gif_remote and gif_remote.startswith(("http://", "https://")):
+                # Primary path: push into Firebase Storage under users/{uid}/exports/{export_id}/ from the same URLs the UI shows.
+                if gif_remote and gif_remote.startswith(("http://", "https://")):
                     urls = await asyncio.to_thread(
                         upload_user_export_media_from_urls,
                         uid=uid,
@@ -1115,10 +1108,18 @@ async def save_export_to_library(job_id: str, request: Request) -> JSONResponse:
                         gif_url=gif_remote,
                         webm_url=webm_remote if webm_remote and webm_remote.startswith(("http://", "https://")) else None,
                     )
+                elif gif_path.is_file():
+                    urls = await asyncio.to_thread(
+                        upload_user_export_media,
+                        uid=uid,
+                        export_id=export_id,
+                        gif_path=gif_path,
+                        webm_path=webm_path if webm_path.is_file() else None,
+                    )
                 else:
                     out["storageError"] = (
-                        "Firebase upload skipped: no matte.gif on disk and no gif_url in save request. "
-                        "Hard-refresh the dashboard and save again with the same clip."
+                        "Could not upload to Firebase: no gif_url in this save request. "
+                        "Go back to the result screen and tap Save export again."
                     )
                 if urls:
                     (job_dir / _STORAGE_URLS_FILE).write_text(
