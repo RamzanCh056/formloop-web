@@ -538,14 +538,20 @@ def _fetch_remote_asset_if_missing(url: str | None, dest: Path, *, min_size: int
         return dest.is_file() and dest.stat().st_size >= min_size
     if dest.is_file() and dest.stat().st_size >= min_size:
         return True
+    hdrs = {
+        "User-Agent": "FormLoop-Server/1.0",
+        "Accept": "*/*",
+    }
     try:
-        r = requests.get(u, timeout=timeout)
+        r = requests.get(u, timeout=timeout, headers=hdrs, allow_redirects=True)
         r.raise_for_status()
         data = r.content
         if len(data) >= min_size:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
+            _log.info("Fetched remote asset %s -> %s (%s bytes)", u[:80], dest.name, len(data))
             return True
+        _log.warning("Remote fetch too small (%s bytes): %s", len(data), u[:96])
     except Exception as exc:
         _log.warning("Remote fetch failed %s -> %s: %s", u[:96], dest.name, exc)
     return dest.is_file() and dest.stat().st_size >= min_size
@@ -1054,12 +1060,6 @@ async def save_export_to_library(job_id: str, request: Request) -> JSONResponse:
     uid = (request.session.get("user_id") or "").strip()
     if not uid:
         raise HTTPException(status_code=401, detail="Sign in required to save this export.")
-    job_dir = OUTPUTS_DIR / job_id
-    if not job_dir.is_dir():
-        raise HTTPException(status_code=404, detail="job not found")
-    owner = read_job_owner(job_dir)
-    if owner and owner != uid:
-        raise HTTPException(status_code=403, detail="not your export")
     payload: dict = {}
     ct = (request.headers.get("content-type") or "").lower()
     if "application/json" in ct:
@@ -1072,6 +1072,21 @@ async def save_export_to_library(job_id: str, request: Request) -> JSONResponse:
     export_id = _sanitize_export_id(str(payload.get("export_id") or ""))
     gif_remote = str(payload.get("gif_url") or "").strip() or None
     webm_remote = str(payload.get("webm_url") or "").strip() or None
+
+    job_dir = OUTPUTS_DIR / job_id
+    # RunPod / multi-instance: job folder may be missing if outputs were pruned or another node handled the job.
+    # If the browser sends Firebase GIF/WebM URLs, create the folder and hydrate files so save + Storage upload work.
+    if not job_dir.is_dir():
+        if gif_remote or webm_remote:
+            job_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail="job folder not on this server — retry Save after processing, or ensure API sticky sessions / shared volume.",
+            )
+    owner = read_job_owner(job_dir)
+    if owner and owner != uid:
+        raise HTTPException(status_code=403, detail="not your export")
     if gif_remote or webm_remote:
         await asyncio.to_thread(_ensure_job_assets_from_client_urls, job_dir, gif_remote, webm_remote)
     try:
@@ -1089,19 +1104,25 @@ async def save_export_to_library(job_id: str, request: Request) -> JSONResponse:
             if firebase_storage_ready():
                 gif_path = job_dir / "matte.gif"
                 webm_path = job_dir / "matte_transparent.webm"
-                urls = await asyncio.to_thread(
-                    upload_user_export_media,
-                    uid=uid,
-                    export_id=export_id,
-                    gif_path=gif_path,
-                    webm_path=webm_path if webm_path.is_file() else None,
-                )
-                (job_dir / _STORAGE_URLS_FILE).write_text(
-                    json.dumps(urls, separators=(",", ":")),
-                    encoding="utf-8",
-                )
-                out["storageGifUrl"] = urls["gifUrl"]
-                out["storageWebmUrl"] = urls.get("webmUrl")
+                if not gif_path.is_file():
+                    out["storageError"] = (
+                        "matte.gif not on server — could not download from gif_url. "
+                        "Sign-in library still updated; use the RunPod/Firebase GIF link in your app."
+                    )
+                else:
+                    urls = await asyncio.to_thread(
+                        upload_user_export_media,
+                        uid=uid,
+                        export_id=export_id,
+                        gif_path=gif_path,
+                        webm_path=webm_path if webm_path.is_file() else None,
+                    )
+                    (job_dir / _STORAGE_URLS_FILE).write_text(
+                        json.dumps(urls, separators=(",", ":")),
+                        encoding="utf-8",
+                    )
+                    out["storageGifUrl"] = urls["gifUrl"]
+                    out["storageWebmUrl"] = urls.get("webmUrl")
         except Exception as exc:
             _log.exception("Firebase Storage upload failed job_id=%s export_id=%s", job_id, export_id)
             out["storageError"] = str(exc)
