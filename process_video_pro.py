@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -69,6 +70,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--gif", required=True, help="output GIF path")
     p.add_argument("--fg", default=None, help="output foreground MP4 (optional)")
     p.add_argument("--alpha", default=None, help="output alpha MP4 (optional)")
+    p.add_argument("--webm", default=None, help="output transparent WebM (optional)")
     p.add_argument("--gif-width", type=int, default=640, help="GIF width in pixels")
     p.add_argument("--gif-fps", type=int, default=15, help="GIF fps")
     p.add_argument("--device", default="auto", help="auto / cuda / mps / cpu")
@@ -421,6 +423,73 @@ def _writer(path: Path, fps: float, w: int, h: int, gray: bool = False):
     return cv2.VideoWriter(str(path), fourcc, float(fps), (w, h), isColor=(not gray))
 
 
+def _mux_webm_alpha(fg_mp4: Path, alpha_mp4: Path, out_webm: Path) -> None:
+    """Write transparent WebM using fg+alpha tracks; fallback VP8 if VP9 unavailable."""
+    out_webm.parent.mkdir(parents=True, exist_ok=True)
+    fc = (
+        "[0:v]format=rgb24[rgb];"
+        "[1:v]format=gray,extractplanes=y[am];"
+        "[rgb][am]alphamerge,format=yuva420p[v]"
+    )
+    last_err = ""
+    for enc_args in (
+        [
+            "-c:v",
+            "libvpx-vp9",
+            "-pix_fmt",
+            "yuva420p",
+            "-auto-alt-ref",
+            "0",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-deadline",
+            "good",
+            "-cpu-used",
+            "4",
+        ],
+        [
+            "-c:v",
+            "libvpx",
+            "-pix_fmt",
+            "yuva420p",
+            "-auto-alt-ref",
+            "0",
+            "-crf",
+            "32",
+            "-b:v",
+            "0",
+            "-deadline",
+            "good",
+            "-cpu-used",
+            "4",
+        ],
+    ):
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            str(fg_mp4),
+            "-i",
+            str(alpha_mp4),
+            "-filter_complex",
+            fc,
+            "-map",
+            "[v]",
+            *enc_args,
+            str(out_webm),
+        ]
+        r = subprocess.run(cmd, capture_output=True, text=True)
+        if r.returncode == 0 and out_webm.is_file() and out_webm.stat().st_size > 32:
+            return
+        last_err = (r.stderr or r.stdout or "")[-800:]
+    raise RuntimeError(f"WebM mux failed (vp9+vp8): {last_err}")
+
+
 def main() -> None:
     args = parse_args()
     inp = Path(args.input).resolve()
@@ -593,6 +662,17 @@ def main() -> None:
             fg_writer.release()
         if a_writer is not None:
             a_writer.release()
+
+    if args.webm:
+        fg_mp4 = Path(args.fg).resolve() if args.fg else None
+        alpha_mp4 = Path(args.alpha).resolve() if args.alpha else None
+        webm_out = Path(args.webm).resolve()
+        if fg_mp4 and alpha_mp4 and fg_mp4.is_file() and alpha_mp4.is_file():
+            try:
+                _mux_webm_alpha(fg_mp4, alpha_mp4, webm_out)
+                print(f"[WEBM] Saved {webm_out}", flush=True)
+            except Exception as exc:
+                print(f"[WEBM] skip ({exc})", flush=True)
 
     _gif_max_default = "280" if args.no_yolo else "480"
     max_gif = max(24, int(os.environ.get("RVM_PRO_GIF_MAX_FRAMES", _gif_max_default)))

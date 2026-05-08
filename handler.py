@@ -160,6 +160,7 @@ def handler(job):
             "--gif",       gif_path,
             "--fg",        fg_path,
             "--alpha",     alpha_path,
+            "--webm",      webm_path,
             "--gif-width", str(gif_width),
             "--gif-fps",   str(gif_fps),
             "--dilation",  str(dilation),
@@ -171,6 +172,9 @@ def handler(job):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=RVM_RUN_TIMEOUT_SEC)
 
         print(f"[Job] stdout: {result.stdout[-500:]}")
+        print(f"[DEBUG] gif_path = {gif_path}")
+        print(f"[DEBUG] gif exists = {os.path.exists(gif_path)}")
+        print(f"[DEBUG] tmp_dir contents = {os.listdir(tmp_dir)}")
 
         if result.returncode != 0:
             print(f"[Job] Error: {result.stderr[-500:]}")
