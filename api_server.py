@@ -139,6 +139,7 @@ ALLOWED_RESULT_FILES = frozenset(
 
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _EXPORT_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,120}$")
+SAVE_FLOW_VERSION = "firebase-first-ca154cd-plus"
 _STORAGE_URLS_FILE = ".storage_urls.json"
 _TQDM_PERCENT_RE = re.compile(r"(\d{1,3})%\|")
 _RVM_PROGRESS_RE = re.compile(r"RVM_PROGRESS:(\d+)/(\d+):(\d{1,3})")
@@ -1014,6 +1015,7 @@ async def health() -> JSONResponse:
             "rvm_ready": rvm_ready,
             "pro_ready": pro_ready,
             "outputs_dir": str(OUTPUTS_DIR),
+            "save_flow_version": SAVE_FLOW_VERSION,
         }
     )
 
@@ -1131,7 +1133,7 @@ async def save_export_to_library(job_id: str, request: Request) -> JSONResponse:
         except Exception as exc:
             _log.exception("Firebase Storage upload failed job_id=%s export_id=%s", job_id, export_id)
             out["storageError"] = str(exc)
-    return JSONResponse(out)
+    return JSONResponse(out, headers={"X-FormLoop-Save-Flow": SAVE_FLOW_VERSION})
 
 
 async def _run_job_async(
