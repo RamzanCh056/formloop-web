@@ -37,6 +37,7 @@ import threading
 import time
 import uuid
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -77,7 +78,7 @@ except ImportError:
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -136,6 +137,12 @@ ALLOWED_RESULT_FILES = frozenset(
         "preview_white_backdrop.mp4",
     }
 )
+ALLOWED_REMOTE_DOWNLOAD_HOSTS = frozenset(
+    {
+        "firebasestorage.googleapis.com",
+        "storage.googleapis.com",
+    }
+)
 
 _JOB_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _EXPORT_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{1,120}$")
@@ -148,9 +155,7 @@ _JOB_STATES: dict[str, dict] = {}
 
 
 def _quota_enforced() -> bool:
-    """Allow local testing without changing billing logic in code paths."""
-    v = (os.environ.get("RVM_DISABLE_GIF_QUOTA") or "").strip().lower()
-    return v not in {"1", "true", "yes"}
+    return True
 
 
 def _public_base_url(request: Request) -> str:
@@ -430,6 +435,8 @@ def _runpod_submit(
     public_base: str,
     pro_fast_mode: bool | None = None,
     gif_white_bg: bool = False,
+    start_time: float | None = None,
+    end_time: float | None = None,
 ) -> str:
     base = _runpod_base_url()
     if not base:
@@ -440,9 +447,32 @@ def _runpod_submit(
         suffix = ".mp4"
     job_dir = OUTPUTS_DIR / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
-    src_name = f"input{suffix}"
+    src_name = f"{exercise_name}_{job_id[:8]}{suffix}"
     src_path = job_dir / src_name
     src_path.write_bytes(raw)
+    _original_size = len(raw)
+    if (start_time and float(start_time) > 0) or end_time is not None:
+        trimmed_path = str(src_path).replace(suffix, f"_trimmed{suffix}")
+        _probe = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", str(src_path)],
+            capture_output=True, text=True,
+        )
+        duration = _probe.stdout.strip() or "?"
+        print(f"[Trim] Trimming video: {start_time}s to {end_time}s, duration={duration}s", flush=True)
+        st = float(start_time) if start_time else 0.0
+        et = float(end_time) if end_time is not None else None
+        trim_cmd = ["ffmpeg", "-y", "-ss", str(st), "-i", str(src_path)]
+        if et is not None:
+            trim_cmd += ["-t", str(et - st)]
+        trim_cmd += ["-c", "copy", trimmed_path]
+        subprocess.run(trim_cmd, check=True, capture_output=True)
+        src_path = Path(trimmed_path)
+        with open(src_path, "rb") as f:
+            raw = f.read()
+        print(f"[Trim] Video trimmed: {start_time}s to {end_time}s", flush=True)
+        trimmed_size = os.path.getsize(src_path)
+        print(f"[Trim] Original: {_original_size/1024:.0f}KB → Trimmed: {trimmed_size/1024:.0f}KB", flush=True)
     try:
         from firebase_storage_admin import upload_runpod_input_video
 
@@ -461,6 +491,8 @@ def _runpod_submit(
             "gif_fps": int(max(1, min(30, gif_fps))),
             "pro_fast_mode": fast,
             "gif_white_bg": bool(gif_white_bg),
+            "start_time": float(start_time) if start_time else 0,
+            "end_time": float(end_time) if end_time else None,
         }
     }
     # Backward compatibility: older deployed RunPod handlers only read `input.video`.
@@ -1037,6 +1069,30 @@ async def download_result(job_id: str, filename: str) -> FileResponse:
     return FileResponse(path, filename=filename, media_type=media)
 
 
+@app.get("/api/v1/matte/download")
+async def download_remote_asset(url: str, filename: str = "download.bin") -> Response:
+    parsed = urlparse(url or "")
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme != "https" or host not in ALLOWED_REMOTE_DOWNLOAD_HOSTS:
+        raise HTTPException(status_code=400, detail="Unsupported download URL")
+
+    safe_name = Path(filename).name or "download.bin"
+    try:
+        upstream = requests.get(url, timeout=120, allow_redirects=True)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Download failed: {exc}") from exc
+
+    if upstream.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Download failed: upstream status {upstream.status_code}")
+
+    media = upstream.headers.get("content-type", "application/octet-stream")
+    return Response(
+        content=upstream.content,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}"'},
+    )
+
+
 def _sanitize_export_id(raw: str) -> str:
     s = (raw or "").strip()
     if not s:
@@ -1238,6 +1294,8 @@ async def _run_runpod_job_async(
     public_base: str,
     pro_fast_mode: bool | None = None,
     gif_white_bg: bool = False,
+    start_time: float | None = None,
+    end_time: float | None = None,
 ) -> None:
     _set_job_state(job_id, status="queued", progress=0, message="Queued for RunPod")
     try:
@@ -1251,6 +1309,8 @@ async def _run_runpod_job_async(
             public_base=public_base,
             pro_fast_mode=pro_fast_mode,
             gif_white_bg=gif_white_bg,
+            start_time=start_time,
+            end_time=end_time,
         )
         _set_job_state(job_id, status="running", progress=15, message="RunPod job accepted", runpod_job_id=run_id)
         payload = await asyncio.to_thread(_runpod_wait, run_id)
@@ -1361,6 +1421,8 @@ async def matte_video_start(
         False,
         description="If true, GIF is opaque on white. Default false = transparent GIF (clean on white via edge whitening).",
     ),
+    start_time: float | None = Query(None, description="Trim start in seconds."),
+    end_time: float | None = Query(None, description="Trim end in seconds."),
 ) -> JSONResponse:
     if _runpod_only_mode() and not _runpod_enabled():
         raise HTTPException(
@@ -1421,6 +1483,8 @@ async def matte_video_start(
                 public_base=public_base,
                 pro_fast_mode=bool(fast_mode),
                 gif_white_bg=bool(gif_white_bg),
+                start_time=start_time,
+                end_time=end_time,
             )
         )
         return JSONResponse(
@@ -1522,6 +1586,8 @@ async def matte_video(
         False,
         description="If true, pro GIF is opaque on white. Default false = transparent GIF.",
     ),
+    start_time: float | None = Query(None, description="Trim start in seconds."),
+    end_time: float | None = Query(None, description="Trim end in seconds."),
 ) -> JSONResponse:
     """
     Returns JSON with **absolute URLs** for each generated asset (easy to use from mobile).
@@ -1586,6 +1652,8 @@ async def matte_video(
                 public_base=public_base,
                 pro_fast_mode=bool(fast_mode),
                 gif_white_bg=bool(gif_white_bg),
+                start_time=start_time,
+                end_time=end_time,
             )
             payload = await asyncio.to_thread(_runpod_wait, run_id)
             status = str(payload.get("status") or "").upper()

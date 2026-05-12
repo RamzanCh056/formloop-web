@@ -44,3 +44,9 @@ Thumbs.db
 
 # Logs
 *.log
+.env
+api_outputs/
+__pycache__/
+*.pyc
+*.sqlite
+venv/

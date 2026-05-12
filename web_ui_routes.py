@@ -74,6 +74,10 @@ TEMPLATES_DIR = APP_ROOT / "templates"
 SESSION_SECRET = os.environ.get("RVM_SESSION_SECRET", "dev-change-me-use-long-random-string").encode()
 
 
+def _quota_enforced() -> bool:
+    return True
+
+
 def _establish_firebase_session(request: Request, claims: dict[str, Any], name: str, next_path: str) -> JSONResponse:
     uid = claims.get("sub")
     if not uid:
@@ -391,7 +395,7 @@ def dashboard_gifs(request: Request):
     gif_limit = getattr(user, "gif_limit", None)
     n = len(items)
     used_count = 0 if guest_mode else read_quota_usage(str(user.id), billing_period_key_for_uid(str(user.id)))
-    at_quota = not guest_mode and gif_limit is not None and used_count >= gif_limit
+    at_quota = _quota_enforced() and (not guest_mode and gif_limit is not None and used_count >= gif_limit)
     return templates.TemplateResponse(
         "gifs.html",
         {

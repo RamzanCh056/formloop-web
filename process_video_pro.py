@@ -13,6 +13,7 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -355,66 +356,61 @@ def _decimate_frames_for_gif(
 def frames_to_gif(rgba_frames: list[np.ndarray], path: str | Path, fps: int, width: int) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    pil_frames: list[Image.Image] = []
-    duration_ms = max(1, int(round(1000.0 / float(max(1, fps)))))
-    resize_f = getattr(Image, "LANCZOS", Image.Resampling.LANCZOS)
-    q_colors = max(32, min(255, int(os.environ.get("RVM_PRO_GIF_COLORS", "160"))))
-    q_method_name = (os.environ.get("RVM_PRO_GIF_QUANTIZE") or "fast").strip().lower()
-    if q_method_name in {"median", "mediancut", "hq"}:
-        q_method = getattr(Image.Quantize, "MEDIANCUT", Image.Quantize.FASTOCTREE)
-    else:
-        q_method = getattr(Image.Quantize, "FASTOCTREE", Image.Quantize.MEDIANCUT)
-    use_dither = (os.environ.get("RVM_PRO_GIF_DITHER", "0").strip().lower() not in {"0", "false", "no"})
-    dither = Image.Dither.FLOYDSTEINBERG if use_dither else Image.Dither.NONE
-    white_bg = os.environ.get("RVM_PRO_GIF_WHITE_BG", "0").strip().lower() not in {"0", "false", "no"}
-    total = len(rgba_frames)
-    for fi, rgba in enumerate(rgba_frames):
-        if fi > 0 and fi % 80 == 0:
-            print(f"[GIF] quantize {fi}/{total}", flush=True)
-        img = Image.fromarray(rgba, "RGBA")
-        ow, oh = img.size
-        nh = max(1, int(round(oh * width / max(1, ow))))
-        img = img.resize((width, nh), resize_f)
-        if white_bg:
-            base = Image.new("RGBA", img.size, (255, 255, 255, 255))
-            flat = Image.alpha_composite(base, img).convert("RGB")
-            rgb_p = flat.quantize(colors=q_colors, method=q_method, dither=dither)
-            pil_frames.append(rgb_p)
-        else:
-            r, g, b, a = img.split()
-            rgb_p = (
-                Image.merge("RGB", (r, g, b))
-                .quantize(colors=q_colors, method=q_method, dither=dither)
-                .convert("P")
-            )
-            arr = np.array(rgb_p)
-            arr[np.array(a) < 128] = 255
-            frame_p = Image.fromarray(arr, "P")
-            frame_p.putpalette(rgb_p.getpalette())
-            pil_frames.append(frame_p)
-    if not pil_frames:
+    if not rgba_frames:
         return
-    first = pil_frames[0]
-    save_kw: dict = {
-        "format": "GIF",
-        "save_all": True,
-        "append_images": pil_frames[1:],
-        "loop": 0,
-        "duration": duration_ms,
-        "optimize": False,
-    }
-    if white_bg:
-        first.save(str(path), **save_kw)
-    else:
-        first.info["transparency"] = 255
-        first.save(
+    resize_f = getattr(Image, "LANCZOS", Image.Resampling.LANCZOS)
+    with tempfile.TemporaryDirectory(prefix="gif_rgba_") as tmp:
+        tmp_dir = Path(tmp)
+        if rgba_frames:
+            sample = rgba_frames[0]
+            print(sample.shape, flush=True)
+            print(sample.dtype, flush=True)
+            print(np.unique(sample[..., 3])[:20], flush=True)
+        for idx, rgba in enumerate(rgba_frames):
+            img = Image.fromarray(rgba, "RGBA")
+            print(img.mode, flush=True)
+            ow, oh = img.size
+            nh = max(1, int(round(oh * width / max(1, ow))))
+            img = img.resize((width, nh), resize_f)
+            img.save(tmp_dir / f"frame_{idx:05d}.png", format="PNG")
+
+        pattern = str(tmp_dir / "frame_%05d.png")
+        palette = str(tmp_dir / "palette.png")
+        fps_str = str(max(1, int(fps)))
+
+        cmd_palette = [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            fps_str,
+            "-i",
+            pattern,
+            "-vf",
+            "palettegen=reserve_transparent=1",
+            palette,
+        ]
+        rp = subprocess.run(cmd_palette, capture_output=True, text=True)
+        if rp.returncode != 0:
+            raise RuntimeError((rp.stderr or rp.stdout or "palettegen failed")[-1200:])
+
+        cmd_gif = [
+            "ffmpeg",
+            "-y",
+            "-framerate",
+            fps_str,
+            "-i",
+            pattern,
+            "-i",
+            palette,
+            "-filter_complex",
+            "paletteuse=alpha_threshold=128",
             str(path),
-            disposal=2,
-            transparency=255,
-            **save_kw,
-        )
-    sz = path.stat().st_size / 1e6
-    print(f"[GIF] Saved {path} ({sz:.1f}MB)", flush=True)
+        ]
+        rg = subprocess.run(cmd_gif, capture_output=True, text=True)
+        if rg.returncode != 0:
+            raise RuntimeError((rg.stderr or rg.stdout or "paletteuse failed")[-1200:])
+
+    print(f"[GIF] Saved {path}", flush=True)
 
 
 def _writer(path: Path, fps: float, w: int, h: int, gray: bool = False):
@@ -644,8 +640,7 @@ def main() -> None:
                 alpha_u8 = cv2.erode(alpha_u8, k, iterations=1)
             alpha_u8 = _alpha_fringe_gamma(alpha_u8)
             rgba = _rgba_from_bgr_and_alpha(frame, alpha_u8)
-            if _whiten_edges and not _gif_white:
-                rgba = _rgba_whiten_fringe_for_white_backdrop(rgba)
+            rgba = np.ascontiguousarray(rgba.astype(np.uint8))
             gif_rgba.append(rgba)
 
             if fg_writer is not None:
@@ -683,6 +678,10 @@ def main() -> None:
         f"[GIF] encoding {len(gif_src)} frames (video frames={len(gif_rgba)}, target_fps={args.gif_fps})",
         flush=True,
     )
+    print(f"[DEBUG] Total rgba_frames collected: {len(gif_rgba)}", flush=True)
+    print(f"[DEBUG] GIF output path: {args.gif}", flush=True)
+    print(f"[DEBUG] GIF dir exists: {os.path.exists(os.path.dirname(args.gif))}", flush=True)
+    os.makedirs(os.path.dirname(args.gif), exist_ok=True)
     frames_to_gif(gif_src, Path(args.gif).resolve(), int(args.gif_fps), int(args.gif_width))
     print(f"[DONE] outputs under: {Path(args.gif).resolve().parent}", flush=True)
 
