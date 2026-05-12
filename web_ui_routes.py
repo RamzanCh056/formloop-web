@@ -287,9 +287,9 @@ async def login_get(request: Request):
     if request.session.get("user_id"):
         return RedirectResponse("/dashboard", status_code=302)
     return templates.TemplateResponse(
+        request,
         "login.html",
         {
-            "request": request,
             "error": None,
             "next": request.query_params.get("next") or "",
             "firebase_config": get_firebase_web_config(),
@@ -302,9 +302,9 @@ async def signup_get(request: Request):
     if request.session.get("user_id"):
         return RedirectResponse("/dashboard", status_code=302)
     return templates.TemplateResponse(
+        request,
         "signup.html",
         {
-            "request": request,
             "next": request.query_params.get("next") or "",
             "firebase_config": get_firebase_web_config(),
             "firebase_functions_region": get_firebase_functions_region(),
@@ -361,9 +361,9 @@ def dashboard_home(request: Request):
     tier = getattr(user, "plan_tier", "free") or "free"
     gif_limit = getattr(user, "gif_limit", None)
     return templates.TemplateResponse(
+        request,
         "dashboard.html",
         {
-            "request": request,
             "user": user,
             "gif_count": n,
             "used_count": used_count,
@@ -397,9 +397,9 @@ def dashboard_gifs(request: Request):
     used_count = 0 if guest_mode else read_quota_usage(str(user.id), billing_period_key_for_uid(str(user.id)))
     at_quota = _quota_enforced() and (not guest_mode and gif_limit is not None and used_count >= gif_limit)
     return templates.TemplateResponse(
+        request,
         "gifs.html",
         {
-            "request": request,
             "user": user,
             "items": items,
             "guest_mode": guest_mode,
@@ -463,9 +463,9 @@ def profile_page(request: Request):
             f"You’ve used {used_count} of {FREE_TIER_GIF_LIMIT}."
         )
     return templates.TemplateResponse(
+        request,
         "profile.html",
         {
-            "request": request,
             "user": user,
             "gif_count": n,
             "gif_limit": gif_limit,
@@ -545,9 +545,9 @@ async def subscription_page(request: Request):
     elif e == "success":
         notice = "Welcome to your paid plan — your higher GIF quota and watermark-free exports are active."
     return templates.TemplateResponse(
+        request,
         "subscription.html",
         {
-            "request": request,
             "user": user,
             "guest_mode": guest_mode,
             "paid_plans": paid_plans,
