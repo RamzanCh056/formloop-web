@@ -349,6 +349,51 @@ async def logout(request: Request):
     return RedirectResponse("/dashboard", status_code=302)
 
 
+@router.get("/auth/forgot-password", response_class=HTMLResponse)
+async def forgot_password_get(request: Request):
+    return templates.TemplateResponse(
+        request,
+        "forgot_password.html",
+        {"success": False, "error": None, "submitted_email": ""},
+    )
+
+
+@router.post("/auth/forgot-password", response_class=HTMLResponse)
+async def forgot_password_post(request: Request, email: str = Form(...)):
+    import httpx
+
+    cfg = get_firebase_web_config()
+    api_key = cfg.get("apiKey", "")
+    email = email.strip()
+    error: str | None = None
+    success = False
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                f"https://identitytoolkit.googleapis.com/v1/accounts:sendOobCode?key={api_key}",
+                json={"requestType": "PASSWORD_RESET", "email": email},
+            )
+        if resp.status_code == 200:
+            success = True
+        else:
+            body = resp.json()
+            msg = body.get("error", {}).get("message", "")
+            if msg == "EMAIL_NOT_FOUND":
+                # Silently succeed to avoid email enumeration
+                success = True
+            else:
+                error = "Could not send reset email. Try again."
+                _log.warning("forgot-password Firebase error: %s", msg)
+    except Exception as exc:
+        _log.warning("forgot-password request failed: %s", exc)
+        error = "Network error. Please try again."
+    return templates.TemplateResponse(
+        request,
+        "forgot_password.html",
+        {"success": success, "error": error, "submitted_email": "" if success else email},
+    )
+
+
 @router.get("/dashboard", response_class=HTMLResponse)
 def dashboard_home(request: Request):
     user = _session_user(request)
@@ -443,6 +488,11 @@ async def delete_gif_job(request: Request, job_id: str):
     except Exception:
         _log.debug("Firestore delete skipped for job_id=%s", job_id, exc_info=True)
     return RedirectResponse(_redirect_after_gif_delete(request), status_code=303)
+
+
+@router.get("/your-profile", response_class=HTMLResponse)
+async def your_profile_redirect():
+    return RedirectResponse("/profile", status_code=302)
 
 
 @router.get("/profile", response_class=HTMLResponse)

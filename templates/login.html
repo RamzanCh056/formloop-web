@@ -2,7 +2,7 @@
 {% block main_py %}pt-0 pb-5 sm:pb-6{% endblock %}
 {% block title %}Sign in — FormLoop{% endblock %}
 {% block content %}
-<div class="auth-dmotion relative -mx-3 sm:-mx-5 -mt-2 sm:-mt-1 flex flex-col items-center justify-start min-h-[calc(100dvh-3.25rem)] sm:min-h-[calc(100dvh-3.5rem)] pt-0 pb-4 px-3 sm:px-6 overflow-x-hidden">
+<div class="auth-dmotion relative -mx-3 sm:-mx-5 -mt-2 sm:-mt-1 flex flex-col items-center justify-center min-h-[calc(100dvh-3.25rem)] sm:min-h-[calc(100dvh-3.5rem)] py-6 sm:py-8 px-3 sm:px-6 overflow-x-hidden">
   <div class="pointer-events-none absolute inset-0 -z-10">
     <div class="auth-blob-a absolute top-[-20%] left-1/2 h-[70%] w-[90%] -translate-x-1/2 rounded-full bg-indigo-600/[0.08] blur-[120px]"></div>
     <div class="auth-blob-b absolute bottom-[-15%] right-[-5%] h-[55%] w-[55%] rounded-full bg-cyan-500/[0.07] blur-[100px]"></div>
@@ -49,7 +49,7 @@
         <div>
           <div class="mb-1.5 flex items-center justify-between gap-2">
             <label for="password" class="text-xs font-semibold uppercase tracking-wide text-zinc-500">Password</label>
-            <button type="button" id="forgot-pw" class="text-xs font-medium text-cyan-400/90 hover:text-cyan-300 transition">Forgot?</button>
+            <a href="/auth/forgot-password" class="text-xs font-medium text-cyan-400/90 hover:text-cyan-300 transition">Forgot password?</a>
           </div>
           <div class="relative">
             <input id="password" name="password" type="password" autocomplete="current-password" required placeholder="••••••••" class="w-full rounded-xl border border-white/[0.1] bg-zinc-900/90 pl-4 pr-12 py-3 text-sm text-white placeholder:text-zinc-600 outline-none transition duration-300 focus:border-indigo-500/50 focus:ring-2 focus:ring-indigo-500/25 focus:shadow-[0_0_36px_-10px_rgba(99,102,241,0.35)]" />
@@ -86,7 +86,7 @@
 <script type="module">
   const firebaseConfig = {{ firebase_config | tojson }};
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-  import { getAuth, signInWithEmailAndPassword, sendPasswordResetEmail } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+  import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
   import { getFirestore, doc, setDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
   const app = initializeApp(firebaseConfig);
@@ -103,20 +103,6 @@
     pw.type = show ? "text" : "password";
     document.getElementById("eye-open").classList.toggle("hidden", !show);
     document.getElementById("eye-off").classList.toggle("hidden", show);
-  });
-
-  document.getElementById("forgot-pw").addEventListener("click", async () => {
-    const email = document.getElementById("email").value.trim();
-    if (!email) {
-      alert("Enter your email first, then tap Forgot again.");
-      return;
-    }
-    try {
-      await sendPasswordResetEmail(auth, email);
-      alert("Check your inbox for a reset link.");
-    } catch (e) {
-      alert(e?.message || "Could not send reset email.");
-    }
   });
 
   const form = document.getElementById("auth-form");

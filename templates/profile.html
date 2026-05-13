@@ -125,32 +125,6 @@
       <p class="mt-1 text-xl font-bold text-white tabular-nums">{{ quality_metric }}%</p>
       <p class="mt-1 text-[10px] text-zinc-600">WebM-ready exports</p>
     </article>
-    <article class="rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3">
-      <p class="text-[10px] uppercase tracking-wider text-zinc-500">Share link</p>
-      <p id="profile-share-url" class="mt-1 truncate text-xs text-zinc-300">{{ share_link_url or 'https://formloop.app/your-profile' }}</p>
-      <div class="mt-2 flex items-center gap-2">
-        <button id="profile-copy-share" type="button" class="rounded-lg border border-white/10 px-2.5 py-1 text-[11px] font-semibold text-zinc-200 hover:bg-white/[0.05]">Copy</button>
-        <a id="profile-open-share" href="{{ share_link_url or 'https://formloop.app/your-profile' }}" target="_blank" rel="noopener" class="rounded-lg border border-white/10 px-2.5 py-1 text-[11px] font-semibold text-cyan-300 hover:bg-white/[0.05]">Open</a>
-      </div>
-    </article>
   </div>
 </div>
-<script>
-  (function () {
-    const copyBtn = document.getElementById('profile-copy-share');
-    const urlEl = document.getElementById('profile-share-url');
-    if (!copyBtn || !urlEl) return;
-    copyBtn.addEventListener('click', async () => {
-      const v = (urlEl.textContent || '').trim();
-      if (!v) return;
-      try {
-        await navigator.clipboard.writeText(v);
-        copyBtn.textContent = 'Copied';
-        setTimeout(() => (copyBtn.textContent = 'Copy'), 1300);
-      } catch (_) {
-        prompt('Copy this link:', v);
-      }
-    });
-  })();
-</script>
 {% endblock %}
