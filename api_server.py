@@ -48,8 +48,8 @@ os.environ.setdefault("OBJC_DISABLE_INITIALIZE_FORK_SAFETY", "YES")
 
 # Resolve ffmpeg/ffprobe at import time so Railway (no Homebrew) finds the system binaries.
 import shutil as _shutil
-_FFMPEG  = _shutil.which("ffmpeg")  or "ffmpeg"
-_FFPROBE = _shutil.which("ffprobe") or "ffprobe"
+_FFMPEG  = _shutil.which("ffmpeg")  or "/usr/bin/ffmpeg"
+_FFPROBE = _shutil.which("ffprobe") or "/usr/bin/ffprobe"
 
 
 def _load_env_file(path: Path) -> None:

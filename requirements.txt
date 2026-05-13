@@ -98,6 +98,7 @@ typing_extensions==4.15.0
 ultralytics==8.4.31
 ultralytics-thop==2.0.18
 urllib3==2.6.3
+stripe==15.1.0
 uvicorn==0.42.0
 uvloop==0.22.1
 watchfiles==1.1.1

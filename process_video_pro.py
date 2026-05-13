@@ -26,7 +26,7 @@ from torchvision import transforms
 from transformers import AutoModelForImageSegmentation
 from ultralytics import YOLO
 
-_FFMPEG = _shutil.which("ffmpeg") or "ffmpeg"
+_FFMPEG = _shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
 
 # ---------------------------------------------------------------------------
 EXCLUDE = {
